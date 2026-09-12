@@ -59,7 +59,8 @@ def build(versions: list[str] | None, locale: str, prose_only: bool = False) -> 
 
         patches: list[PatchInfo] = []
         total = 0
-        for version in sorted(versions, key=all_versions.index):
+        selected = [v for v in all_versions if v in versions]  # CDN order: newest first
+        for version in reversed(selected):  # write manifest oldest -> newest
             out = raw_dir(version)
             size = 0
             if not prose_only:

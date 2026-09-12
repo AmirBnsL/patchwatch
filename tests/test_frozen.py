@@ -30,7 +30,7 @@ def test_fetcher_content_is_rendered_markdown_with_digest() -> None:
         for d in FrozenCorpusFetcher("16.18.1").fetch(DDAGON_SOURCE)
         if d.external_id == "champion/Ahri"
     )
-    assert doc.content.startswith("# Ahri — the Nine-Tailed Fox (16.18.1)")
+    assert doc.content.startswith("# Ahri — the Nine-Tailed Fox")
     assert doc.digest is not None and doc.digest["name"] == "Ahri"
 
 

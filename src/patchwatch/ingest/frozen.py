@@ -60,7 +60,7 @@ class FrozenCorpusFetcher:
                     external_id=f"champion/{champion_id}",
                     title=f"{detail['data'][champion_id]['name']} (champion)",
                     version=self.version,
-                    content=render_champion_markdown(detail, self.version),
+                    content=render_champion_markdown(detail),
                     published_at=self._published_at,
                     digest=champion_digest(detail),
                 )
@@ -75,7 +75,7 @@ class FrozenCorpusFetcher:
                     external_id=f"item/{item_id}",
                     title=f"{item.get('name', item_id)} (item)",
                     version=self.version,
-                    content=render_item_markdown(item_id, item, self.version),
+                    content=render_item_markdown(item_id, item),
                     published_at=self._published_at,
                     digest=digest,
                 )

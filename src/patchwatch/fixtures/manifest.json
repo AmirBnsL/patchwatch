@@ -1,12 +1,12 @@
 {
-  "built_at": "2026-09-12T18:08:09.066289+00:00",
+  "built_at": "2026-09-12T18:20:15.472436+00:00",
   "locale": "en_US",
   "patches": [
     {
-      "ddragon_version": "16.18.1",
-      "notes_url": "https://www.leagueoflegends.com/en-us/news/game-updates/league-of-legends-patch-26-18-notes/",
-      "released_at": "2026-09-09",
-      "prose_file": "prose/16.18.1.md"
+      "ddragon_version": "16.16.1",
+      "notes_url": "https://www.leagueoflegends.com/en-us/news/game-updates/league-of-legends-patch-26-16-notes/",
+      "released_at": "2026-08-11",
+      "prose_file": "prose/16.16.1.md"
     },
     {
       "ddragon_version": "16.17.1",
@@ -15,10 +15,10 @@
       "prose_file": "prose/16.17.1.md"
     },
     {
-      "ddragon_version": "16.16.1",
-      "notes_url": "https://www.leagueoflegends.com/en-us/news/game-updates/league-of-legends-patch-26-16-notes/",
-      "released_at": "2026-08-11",
-      "prose_file": "prose/16.16.1.md"
+      "ddragon_version": "16.18.1",
+      "notes_url": "https://www.leagueoflegends.com/en-us/news/game-updates/league-of-legends-patch-26-18-notes/",
+      "released_at": "2026-09-09",
+      "prose_file": "prose/16.18.1.md"
     }
   ]
 }

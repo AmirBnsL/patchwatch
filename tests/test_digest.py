@@ -60,18 +60,19 @@ def test_flatten_nested() -> None:
     assert flat == {"a.b": 1, "a.c.0": 10, "a.c.1": 20, "d": "text", "e": None}
 
 
-def test_render_champion_markdown_deterministic() -> None:
+def test_render_champion_markdown_deterministic_and_version_free() -> None:
     detail = _load_json(raw_dir("16.18.1") / "champion" / "Ahri.json")
-    assert render_champion_markdown(detail, "16.18.1") == render_champion_markdown(
-        detail, "16.18.1"
-    )
-    markdown = render_champion_markdown(detail, "16.18.1")
-    assert "# Ahri — the Nine-Tailed Fox (16.18.1)" in markdown
-    assert "Cooldown:" in markdown
+    assert render_champion_markdown(detail) == render_champion_markdown(detail)
+    markdown_new = render_champion_markdown(detail)
+    detail_old = _load_json(raw_dir("16.16.1") / "champion" / "Ahri.json")
+    assert markdown_new == render_champion_markdown(detail_old)  # unchanged scope hashes equal
+    assert "# Ahri — the Nine-Tailed Fox" in markdown_new
+    assert "16.18.1" not in markdown_new  # version stays on the document row
+    assert "Cooldown:" in markdown_new
 
 
 def test_render_item_markdown() -> None:
     items = _load_json(raw_dir("16.18.1") / "item.json")
-    markdown = render_item_markdown("3031", items["data"]["3031"], "16.18.1")
-    assert "# Infinity Edge (16.18.1)" in markdown
+    markdown = render_item_markdown("3031", items["data"]["3031"])
+    assert "# Infinity Edge" in markdown
     assert "Cost: 3500 gold" in markdown

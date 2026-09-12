@@ -113,10 +113,14 @@ def item_digest(
     return digests
 
 
-def render_champion_markdown(detail: dict[str, Any], version: str) -> str:
-    """Deterministic markdown rendering of a champion — the chunk text for indexing."""
+def render_champion_markdown(detail: dict[str, Any]) -> str:
+    """Deterministic markdown rendering of a champion — the chunk text for indexing.
+
+    Deliberately excludes the patch version: unchanged scopes must hash identically
+    across patches so the monitor only re-indexes real changes.
+    """
     entry = next(iter(detail["data"].values()))
-    lines = [f"# {entry['name']} — {entry['title']} ({version})", ""]
+    lines = [f"# {entry['name']} — {entry['title']}", ""]
     if entry.get("partype"):
         lines += [f"Resource: {entry['partype']}", ""]
     lines += ["## Stats", ""]
@@ -139,11 +143,11 @@ def render_champion_markdown(detail: dict[str, Any], version: str) -> str:
     return "\n".join(lines)
 
 
-def render_item_markdown(item_id: str, item: dict[str, Any], version: str) -> str:
+def render_item_markdown(item_id: str, item: dict[str, Any]) -> str:
     """Deterministic markdown rendering of one item — the chunk text for indexing."""
     gold = item.get("gold", {})
     lines = [
-        f"# {item.get('name', item_id)} ({version})",
+        f"# {item.get('name', item_id)}",
         "",
         f"Item id: {item_id}",
         f"Cost: {gold.get('total', 'N/A')} gold (base {gold.get('base', 'N/A')}, "
