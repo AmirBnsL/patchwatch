@@ -11,6 +11,8 @@ from datetime import datetime
 from difflib import SequenceMatcher
 from typing import Any
 
+from langgraph.types import interrupt
+
 from patchwatch.db.repositories import ChunkRecord, Repository
 from patchwatch.diff.numeric import numeric_diff
 from patchwatch.fixtures.snapshot import Digest, Fetcher, SnapshotDocument
@@ -295,6 +297,35 @@ def impact_brief(state: MonitorState, deps: GraphDeps) -> dict[str, Any]:
         "briefs": briefs,
         "log": [f"impact_brief: {len(briefs)} brief(s) generated"],
     }
+
+
+def hitl_gate(state: MonitorState, deps: GraphDeps) -> dict[str, Any]:
+    """Human-approval gate (SPEC §6.1): rework-level briefs pause the run.
+
+    A real LangGraph interrupt: the graph checkpoints and waits; a human resumes
+    with ``Command(resume="approved" | "rejected")``. Briefs that do not require
+    a human auto-approve.
+    """
+    del deps
+    pending = [brief for brief in state["briefs"] if brief.requires_human]
+    if not pending:
+        return {
+            "approval": "auto-approved",
+            "log": [f"hitl_gate: auto-approved ({len(state['briefs'])} brief(s) below threshold)"],
+        }
+    decision = interrupt(
+        {
+            "question": "Approve rework-level briefs?",
+            "scopes": [brief.scope for brief in pending],
+        }
+    )
+    decision_text = str(decision)
+    if decision_text not in ("approved", "rejected"):
+        return {
+            "approval": "rejected",
+            "log": [f"hitl_gate: unrecognized resume {decision_text!r} → rejected"],
+        }
+    return {"approval": decision_text, "log": [f"hitl_gate: {decision_text}"]}
 
 
 def reindex(state: MonitorState, deps: GraphDeps) -> dict[str, Any]:

@@ -119,5 +119,6 @@ class MonitorState(TypedDict):
     candidates: list[ChangeCandidate]
     contradictions: list[ContradictionVerdict]
     briefs: list[ImpactBrief]
+    approval: str  # auto-approved | approved | rejected (set by hitl_gate)
     reindexed: bool
     log: list[str]

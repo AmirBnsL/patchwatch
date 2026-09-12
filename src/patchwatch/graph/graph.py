@@ -5,7 +5,9 @@ Linear Phase A/B pipeline with conditional routing:
     ingest --(no delta)--> END
     ingest --(delta)--> version_diff -> change_class
     change_class --(all neutral)--> END
-    change_class --(any buff/nerf/uncertain)--> contradict_detect -> impact_brief -> reindex -> END
+    change_class --(any buff/nerf/uncertain)--> contradict_detect -> impact_brief -> hitl_gate
+    hitl_gate --(approved/auto)--> reindex -> END
+    hitl_gate --(rejected)--> END
 
 Checkpointed with ``MemorySaver`` (dev); Postgres saver replaces it in Phase C.
 """
@@ -15,6 +17,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 from langchain_core.runnables import RunnableConfig
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
@@ -23,6 +26,7 @@ from patchwatch.graph.nodes import (
     GraphDeps,
     change_class,
     contradict_detect,
+    hitl_gate,
     impact_brief,
     ingest,
     new_run_id,
@@ -36,20 +40,28 @@ def _route_after_ingest(state: MonitorState) -> str:
     return "version_diff" if state["deltas"] else END
 
 
+def _route_after_gate(state: MonitorState) -> str:
+    return "reindex" if state["approval"] in ("auto-approved", "approved") else END
+
+
 def _route_after_classify(state: MonitorState) -> str:
     if any(candidate.change_class in ACTIONABLE for candidate in state["candidates"]):
         return "contradict_detect"
     return END
 
 
-def build_graph(deps: GraphDeps) -> CompiledStateGraph[MonitorState, Any, Any, Any]:
-    """Compile the monitor graph with an in-memory checkpointer."""
+def build_graph(
+    deps: GraphDeps,
+    checkpointer: BaseCheckpointSaver[Any] | None = None,
+) -> CompiledStateGraph[MonitorState, Any, Any, Any]:
+    """Compile the monitor graph (MemorySaver by default; Postgres saver in prod)."""
     graph = StateGraph(MonitorState)
     graph.add_node("ingest", lambda state: ingest(state, deps))
     graph.add_node("version_diff", lambda state: version_diff(state, deps))
     graph.add_node("change_class", lambda state: change_class(state, deps))
     graph.add_node("contradict_detect", lambda state: contradict_detect(state, deps))
     graph.add_node("impact_brief", lambda state: impact_brief(state, deps))
+    graph.add_node("hitl_gate", lambda state: hitl_gate(state, deps))
     graph.add_node("reindex", lambda state: reindex(state, deps))
 
     graph.add_edge(START, "ingest")
@@ -61,10 +73,11 @@ def build_graph(deps: GraphDeps) -> CompiledStateGraph[MonitorState, Any, Any, A
         "change_class", _route_after_classify, {"contradict_detect": "contradict_detect", END: END}
     )
     graph.add_edge("contradict_detect", "impact_brief")
-    graph.add_edge("impact_brief", "reindex")
+    graph.add_edge("impact_brief", "hitl_gate")
+    graph.add_conditional_edges("hitl_gate", _route_after_gate, {"reindex": "reindex", END: END})
     graph.add_edge("reindex", END)
 
-    return graph.compile(checkpointer=MemorySaver())
+    return graph.compile(checkpointer=checkpointer or MemorySaver())
 
 
 def run_monitor(
@@ -88,6 +101,7 @@ def run_monitor(
         "candidates": [],
         "contradictions": [],
         "briefs": [],
+        "approval": "",
         "reindexed": False,
         "log": [],
     }

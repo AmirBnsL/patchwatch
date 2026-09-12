@@ -52,12 +52,13 @@ class FakeRepository:
 
 @dataclass
 class FakeFetcher:
-    """Fetcher returning a fixed set of documents."""
+    """Fetcher returning a fixed set of documents (source-checked, configurable)."""
 
     docs: list[SnapshotDocument]
+    expected_source: str = FIXTURE_SOURCE
 
     def fetch(self, source: str) -> list[SnapshotDocument]:
-        if source != FIXTURE_SOURCE:
+        if source != self.expected_source:
             raise ValueError(f"unsupported source: {source!r}")
         return self.docs
 
