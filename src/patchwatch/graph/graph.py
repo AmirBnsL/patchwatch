@@ -34,6 +34,8 @@ from patchwatch.graph.nodes import (
     version_diff,
 )
 from patchwatch.graph.state import ACTIONABLE, MonitorState
+from patchwatch.observability.runs import RunRecorder, RunTimer, new_trace_id
+from patchwatch.observability.tracing import traced_node
 
 
 def _route_after_ingest(state: MonitorState) -> str:
@@ -56,13 +58,22 @@ def build_graph(
 ) -> CompiledStateGraph[MonitorState, Any, Any, Any]:
     """Compile the monitor graph (MemorySaver by default; Postgres saver in prod)."""
     graph = StateGraph(MonitorState)
-    graph.add_node("ingest", lambda state: ingest(state, deps))
-    graph.add_node("version_diff", lambda state: version_diff(state, deps))
-    graph.add_node("change_class", lambda state: change_class(state, deps))
-    graph.add_node("contradict_detect", lambda state: contradict_detect(state, deps))
-    graph.add_node("impact_brief", lambda state: impact_brief(state, deps))
-    graph.add_node("hitl_gate", lambda state: hitl_gate(state, deps))
-    graph.add_node("reindex", lambda state: reindex(state, deps))
+    graph.add_node("ingest", traced_node("ingest", lambda state: ingest(state, deps)))
+    graph.add_node(
+        "version_diff", traced_node("version_diff", lambda state: version_diff(state, deps))
+    )
+    graph.add_node(
+        "change_class", traced_node("change_class", lambda state: change_class(state, deps))
+    )
+    graph.add_node(
+        "contradict_detect",
+        traced_node("contradict_detect", lambda state: contradict_detect(state, deps)),
+    )
+    graph.add_node(
+        "impact_brief", traced_node("impact_brief", lambda state: impact_brief(state, deps))
+    )
+    graph.add_node("hitl_gate", traced_node("hitl_gate", lambda state: hitl_gate(state, deps)))
+    graph.add_node("reindex", traced_node("reindex", lambda state: reindex(state, deps)))
 
     graph.add_edge(START, "ingest")
     graph.add_conditional_edges(
@@ -86,10 +97,17 @@ def run_monitor(
     run_id: str | None = None,
     patch_from: str | None = None,
     patch_to: str | None = None,
+    checkpointer: BaseCheckpointSaver[Any] | None = None,
+    recorder: RunRecorder | None = None,
 ) -> dict[str, Any]:
-    """Run one monitor pass; returns the final state (for summaries/eval)."""
+    """Run one monitor pass; records runs/changes/briefings when a recorder is wired."""
     run_id = run_id or new_run_id()
-    graph = build_graph(deps)
+    trace_id = new_trace_id()
+    timer = RunTimer()
+    timer.start()
+    if recorder is not None:
+        recorder.start_run(run_id, trace_id)
+    graph = build_graph(deps, checkpointer)
     config: RunnableConfig = {"configurable": {"thread_id": run_id}}
     initial: MonitorState = {
         "run_id": run_id,
@@ -105,4 +123,8 @@ def run_monitor(
         "reindexed": False,
         "log": [],
     }
-    return cast(dict[str, Any], graph.invoke(initial, config))
+    result = cast(dict[str, Any], graph.invoke(initial, config))
+    if recorder is not None:
+        status = "gated" if result.get("__interrupt__") else None
+        recorder.record_results(run_id, result, timer.elapsed_ms(), status=status)
+    return result

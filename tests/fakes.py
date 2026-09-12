@@ -95,3 +95,31 @@ class FakeAdjudicator:
     def adjudicate(self, old_text: str, new_text: str) -> str:
         self.calls.append((old_text, new_text))
         return self.verdict
+
+
+class FakeRunState:
+    """No-op run-state methods recording calls (runs/changes/briefings)."""
+
+    def __init__(self) -> None:
+        self.runs: list[tuple[str, datetime, str]] = []
+        self.finished: list[dict] = []
+        self.changes: list[dict] = []
+        self.briefings: list[dict] = []
+
+    def insert_run(self, run_id: str, started_at: datetime, trace_id: str) -> None:
+        self.runs.append((run_id, started_at, trace_id))
+
+    def finish_run(self, **kwargs) -> None:
+        self.finished.append(kwargs)
+
+    def insert_change(self, **kwargs) -> str:
+        self.changes.append(kwargs)
+        return f"change-{len(self.changes)}"
+
+    def insert_briefing(self, **kwargs) -> str:
+        self.briefings.append(kwargs)
+        return f"brief-{len(self.briefings)}"
+
+
+class FakeStateRepository(FakeRepository, FakeRunState):
+    """Full Repository protocol double: docs/chunks + run state."""

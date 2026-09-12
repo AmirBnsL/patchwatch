@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Protocol
+from typing import Any, Protocol
+from uuid import uuid4
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
@@ -58,12 +60,156 @@ class Repository(Protocol):
 
     def supersede_document(self, document_id: str, valid_to: datetime) -> None: ...
 
+    def insert_run(self, run_id: str, started_at: datetime, trace_id: str) -> None: ...
 
-class DocumentRepository:
-    """Postgres-backed implementation of :class:`Repository`."""
+    def finish_run(
+        self,
+        *,
+        run_id: str,
+        finished_at: datetime,
+        status: str,
+        token_cost_cents: float,
+        latency_ms: int,
+    ) -> None: ...
+
+    def insert_change(
+        self,
+        *,
+        run_id: str,
+        document_id: str | None,
+        old_version: str | None,
+        new_version: str,
+        diff_preview: str,
+        change_class: str,
+        severity: str,
+        contradiction: bool,
+        status: str,
+    ) -> str: ...
+
+    def insert_briefing(
+        self,
+        *,
+        run_id: str,
+        change_id: str | None,
+        summary: str,
+        impact_points: list[dict[str, Any]],
+        grounded_in: list[str],
+        requires_human: bool,
+    ) -> str: ...
+
+
+class RunStateRepository:
+    """Run-state methods (runs / detected_changes / briefings) mixed into DocumentRepository."""
 
     def __init__(self, engine: Engine) -> None:
         self._engine = engine
+
+    def insert_run(self, run_id: str, started_at: datetime, trace_id: str) -> None:
+        with self._engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO runs (id, started_at, status, trace_id) "
+                    "VALUES (:id, :started_at, 'running', :trace_id)"
+                ),
+                {"id": run_id, "started_at": started_at, "trace_id": trace_id},
+            )
+
+    def finish_run(
+        self,
+        *,
+        run_id: str,
+        finished_at: datetime,
+        status: str,
+        token_cost_cents: float,
+        latency_ms: int,
+    ) -> None:
+        with self._engine.begin() as conn:
+            conn.execute(
+                text(
+                    "UPDATE runs SET finished_at = :finished_at, status = :status, "
+                    "token_cost_cents = :cost, latency_ms = :latency WHERE id = :id"
+                ),
+                {
+                    "id": run_id,
+                    "finished_at": finished_at,
+                    "status": status,
+                    "cost": token_cost_cents,
+                    "latency": latency_ms,
+                },
+            )
+
+    def insert_change(
+        self,
+        *,
+        run_id: str,
+        document_id: str | None,
+        old_version: str | None,
+        new_version: str,
+        diff_preview: str,
+        change_class: str,
+        severity: str,
+        contradiction: bool,
+        status: str,
+    ) -> str:
+        change_id = str(uuid4())
+        with self._engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO detected_changes "
+                    "(id, run_id, document_id, old_version, new_version, diff_preview, "
+                    " change_class, severity, contradiction, status) "
+                    "VALUES (:id, :run_id, :document_id, :old_version, :new_version, "
+                    " :diff_preview, :change_class, :severity, :contradiction, :status)"
+                ),
+                {
+                    "id": change_id,
+                    "run_id": run_id,
+                    "document_id": document_id,
+                    "old_version": old_version,
+                    "new_version": new_version,
+                    "diff_preview": diff_preview,
+                    "change_class": change_class,
+                    "severity": severity,
+                    "contradiction": contradiction,
+                    "status": status,
+                },
+            )
+        return change_id
+
+    def insert_briefing(
+        self,
+        *,
+        run_id: str,
+        change_id: str | None,
+        summary: str,
+        impact_points: list[dict[str, Any]],
+        grounded_in: list[str],
+        requires_human: bool,
+    ) -> str:
+        briefing_id = str(uuid4())
+        with self._engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO briefings "
+                    "(id, run_id, change_id, summary, impact_points, grounded_in, requires_human) "
+                    "VALUES (:id, :run_id, :change_id, :summary, "
+                    " CAST(:impact_points AS jsonb), CAST(:grounded_in AS jsonb), :requires_human)"
+                ),
+                {
+                    "id": briefing_id,
+                    "run_id": run_id,
+                    "change_id": change_id,
+                    "summary": summary,
+                    "impact_points": json.dumps(impact_points),
+                    "grounded_in": json.dumps(grounded_in),
+                    "requires_human": requires_human,
+                },
+            )
+        return briefing_id
+
+
+class DocumentRepository(RunStateRepository):
+    """Postgres-backed implementation of :class:`Repository`."""
 
     def latest(self, source: str, external_id: str) -> StoredDocument | None:
         with self._engine.connect() as conn:
