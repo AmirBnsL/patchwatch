@@ -49,7 +49,11 @@ class Repository(Protocol):
     ) -> str: ...
 
     def insert_chunks(
-        self, document_id: str, chunks: list[ChunkRecord], valid_from: datetime
+        self,
+        document_id: str,
+        chunks: list[ChunkRecord],
+        valid_from: datetime,
+        embeddings: list[list[float]] | None = None,
     ) -> None: ...
 
     def supersede_document(self, document_id: str, valid_to: datetime) -> None: ...
@@ -134,17 +138,25 @@ class DocumentRepository:
             return str(existing[0])
 
     def insert_chunks(
-        self, document_id: str, chunks: list[ChunkRecord], valid_from: datetime
+        self,
+        document_id: str,
+        chunks: list[ChunkRecord],
+        valid_from: datetime,
+        embeddings: list[list[float]] | None = None,
     ) -> None:
+        """Insert chunk rows; ``embeddings[i]`` pairs with ``chunks[i]`` (None = skip)."""
         if not chunks:
             return
-        # embedding intentionally NULL in Phase A (column is nullable); filled in Phase B.
+        if embeddings is not None and len(embeddings) != len(chunks):
+            raise ValueError("embeddings must pair 1:1 with chunks")
+        # embedding intentionally NULL when no provider is wired (Phase A behavior).
         with self._engine.begin() as conn:
             conn.execute(
                 text(
                     "INSERT INTO chunks "
-                    "(document_id, chunk_index, content, valid_from, source_hash) "
-                    "VALUES (:document_id, :chunk_index, :content, :valid_from, :source_hash) "
+                    "(document_id, chunk_index, content, embedding, valid_from, source_hash) "
+                    "VALUES (:document_id, :chunk_index, :content, "
+                    "CAST(:embedding AS vector), :valid_from, :source_hash) "
                     "ON CONFLICT (document_id, chunk_index, valid_from) DO NOTHING"
                 ),
                 [
@@ -152,10 +164,11 @@ class DocumentRepository:
                         "document_id": document_id,
                         "chunk_index": chunk.chunk_index,
                         "content": chunk.content,
+                        "embedding": _to_vector_literal(embeddings[index]) if embeddings else None,
                         "valid_from": valid_from,
                         "source_hash": _hash(chunk.content),
                     }
-                    for chunk in chunks
+                    for index, chunk in enumerate(chunks)
                 ],
             )
 
@@ -175,3 +188,10 @@ def _hash(content: str) -> str:
     from patchwatch.ingest.normalize import content_hash
 
     return content_hash(content)
+
+
+def _to_vector_literal(vector: list[float] | None) -> str | None:
+    """pgvector text literal: '[0.1,0.2,...]' (CAST handles it in SQL)."""
+    if vector is None:
+        return None
+    return "[" + ",".join(f"{component:.7f}" for component in vector) + "]"

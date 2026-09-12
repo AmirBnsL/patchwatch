@@ -53,6 +53,14 @@ class DigestLoader(Protocol):
     def load(self, source: str, external_id: str, version: str) -> Digest | None: ...
 
 
+class LLMAdjudicator(Protocol):
+    """Adjudicates borderline prose changes (mockable; real impl = LLM, Phase B)."""
+
+    def adjudicate(self, old_text: str, new_text: str) -> str:
+        """Return 'neutral' or 'uncertain' for a borderline prose change."""
+        ...
+
+
 class MonitorState(TypedDict):
     """State carried through the monitor graph."""
 

@@ -19,15 +19,20 @@ from patchwatch.graph.state import (
     ChangeCandidate,
     DigestLoader,
     DocDelta,
+    LLMAdjudicator,
     MonitorState,
 )
 from patchwatch.ingest.chunking import chunk_text
+from patchwatch.ingest.embeddings import EmbeddingProvider, cosine_similarity
 from patchwatch.ingest.normalize import content_hash, normalize_text
 
-# difflib ratio above which a prose-only change is treated as neutral (Phase A
-# heuristic; replaced by embedding distance + LLM adjudication in Phase B).
-# Calibrated on the frozen corpus: planted typo ~0.999, real rewrites < 0.93.
+# difflib ratio above which a prose-only change is treated as neutral (fallback
+# when no embedder is wired; calibrated on the frozen corpus).
 COSMETIC_SIMILARITY_THRESHOLD = 0.96
+
+# Embedding-distance bands for prose changes (cosine similarity).
+EMBED_NEUTRAL_HIGH = 0.97  # >= → neutral without adjudication
+EMBED_ADJUDICATE_LOW = 0.80  # >= → LLM adjudication; < → uncertain
 
 
 @dataclass
@@ -37,6 +42,8 @@ class GraphDeps:
     fetcher: Fetcher
     repo: Repository
     digest_loader: DigestLoader | None = None  # numeric sources only
+    embedder: EmbeddingProvider | None = None  # enables vector storage + prose distance
+    adjudicator: LLMAdjudicator | None = None  # borderline prose adjudication
 
 
 def _parse_iso(value: str) -> datetime:
@@ -132,14 +139,20 @@ def _prose_candidates(delta: DocDelta, deps: GraphDeps) -> list[ChangeCandidate]
 
 
 def change_class(state: MonitorState, deps: GraphDeps) -> dict[str, Any]:
-    """Assign the final class: numeric direction first, prose similarity second."""
-    del deps
+    """Assign the final class: numeric direction first, prose similarity second.
+
+    Prose changes use embedding distance (if an embedder is wired) with LLM
+    adjudication for the borderline band; difflib similarity is the fallback.
+    Prose-only changes never claim a direction — they end 'neutral'/'uncertain'.
+    """
     classified: list[ChangeCandidate] = []
     for candidate in state["candidates"]:
         if candidate.kind == "numeric":
             label = candidate.direction or "uncertain"
         elif not candidate.old_text:
             label = "uncertain"  # brand-new content
+        elif deps.embedder is not None:
+            label = _prose_label_embedded(candidate, deps)
         elif candidate.similarity >= COSMETIC_SIMILARITY_THRESHOLD:
             label = NEUTRAL
         else:
@@ -152,6 +165,18 @@ def change_class(state: MonitorState, deps: GraphDeps) -> dict[str, Any]:
         "candidates": classified,
         "log": [f"change_class: {summary or 'none'}"],
     }
+
+
+def _prose_label_embedded(candidate: ChangeCandidate, deps: GraphDeps) -> str:
+    """Embedding-distance classification for a prose change."""
+    assert deps.embedder is not None
+    [old_vector, new_vector] = deps.embedder.embed([candidate.old_text, candidate.new_text])
+    similarity = cosine_similarity(old_vector, new_vector)
+    if similarity >= EMBED_NEUTRAL_HIGH:
+        return NEUTRAL
+    if similarity >= EMBED_ADJUDICATE_LOW and deps.adjudicator is not None:
+        return deps.adjudicator.adjudicate(candidate.old_text, candidate.new_text)
+    return "uncertain"
 
 
 def reindex(state: MonitorState, deps: GraphDeps) -> dict[str, Any]:
@@ -173,7 +198,12 @@ def reindex(state: MonitorState, deps: GraphDeps) -> dict[str, Any]:
             ChunkRecord(chunk_index=index, content=text)
             for index, text in enumerate(chunk_text(doc.content))
         ]
-        deps.repo.insert_chunks(new_doc_id, chunks, published_at)
+        embeddings = (
+            deps.embedder.embed([chunk.content for chunk in chunks])
+            if deps.embedder is not None
+            else None
+        )
+        deps.repo.insert_chunks(new_doc_id, chunks, published_at, embeddings)
     return {
         "reindexed": True,
         "log": [f"reindex: indexed {len(state['deltas'])} document version(s)"],

@@ -18,7 +18,9 @@ class FakeRepository:
     latest_by: dict[tuple[str, str], StoredDocument] = field(default_factory=dict)
     chunks_by_doc: dict[str, list[str]] = field(default_factory=dict)
     inserts: list[dict[str, Any]] = field(default_factory=list)
-    chunk_inserts: list[tuple[str, list[tuple[int, str]], datetime]] = field(default_factory=list)
+    chunk_inserts: list[tuple[str, list[tuple[int, str]], datetime, list[list[float]] | None]] = (
+        field(default_factory=list)
+    )
     superseded: list[tuple[str, datetime]] = field(default_factory=list)
     _next_id: int = 0
 
@@ -34,10 +36,14 @@ class FakeRepository:
         return f"doc-{self._next_id}"
 
     def insert_chunks(
-        self, document_id: str, chunks: list[ChunkRecord], valid_from: datetime
+        self,
+        document_id: str,
+        chunks: list[ChunkRecord],
+        valid_from: datetime,
+        embeddings: list[list[float]] | None = None,
     ) -> None:
         self.chunk_inserts.append(
-            (document_id, [(c.chunk_index, c.content) for c in chunks], valid_from)
+            (document_id, [(c.chunk_index, c.content) for c in chunks], valid_from, embeddings)
         )
 
     def supersede_document(self, document_id: str, valid_to: datetime) -> None:
@@ -76,3 +82,15 @@ class FakeDigestLoader:
 
     def load(self, source: str, external_id: str, version: str) -> dict | None:
         return self.digests.get((external_id, version))
+
+
+class FakeAdjudicator:
+    """Canned LLM adjudicator: routes by keyword for tests."""
+
+    def __init__(self, verdict: str = "uncertain") -> None:
+        self.verdict = verdict
+        self.calls: list[tuple[str, str]] = []
+
+    def adjudicate(self, old_text: str, new_text: str) -> str:
+        self.calls.append((old_text, new_text))
+        return self.verdict
