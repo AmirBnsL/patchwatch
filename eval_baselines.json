@@ -1,0 +1,9 @@
+{
+  "measured_at": "2026-09-12T19:30:00Z",
+  "corpus": ["16.16.1", "16.17.1", "16.18.1"],
+  "baselines": {
+    "detection_precision": 1.0,
+    "detection_recall": 1.0,
+    "classification_accuracy": 1.0
+  }
+}

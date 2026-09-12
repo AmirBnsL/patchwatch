@@ -22,3 +22,15 @@ jobs:
         run: uv run mypy src
       - name: Unit tests
         run: uv run pytest -m "not integration"
+
+  eval-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.14"
+      - name: Install dependencies
+        run: uv sync
+      - name: Eval regression gate (vs committed baselines)
+        run: uv run scripts/check_gate.py
