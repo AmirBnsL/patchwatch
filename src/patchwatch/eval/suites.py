@@ -1,16 +1,23 @@
-"""Eval suites over the frozen corpus: detection P/R + classification accuracy.
+"""Eval suites over the frozen corpus: detection P/R + classification + mixing.
 
-Both suites are deterministic (no LLM) in Phase A′: the numeric diff IS the
-detector, and direction-table labels are checked against hand-verified labels.
+Detection/classification suites are deterministic (no LLM) in Phase A′/B′: the
+numeric diff IS the detector, and direction-table labels are checked against
+hand-verified labels. The version-mixing suite runs patch-scoped retrieval
+against the indexed corpus (integration surface).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
+from sqlalchemy.engine import Engine
+
+from patchwatch.db.retrieval import retrieve, version_mix_report
 from patchwatch.diff.numeric import NumericChange, numeric_diff
 from patchwatch.eval.labels import PAIR, SCOPE_DIRECTIONS, UNCHANGED_SPOT_CHECKS
 from patchwatch.graph.state import UNCERTAIN
+from patchwatch.ingest.embeddings import EmbeddingProvider
 from patchwatch.ingest.frozen import DDAGON_SOURCE, FrozenCorpusFetcher, FrozenDigestLoader
 
 
@@ -97,3 +104,36 @@ def run_classification_suite() -> ClassificationReport:
         else:
             wrong.append((scope, expected, got))
     return ClassificationReport(correct, wrong)
+
+
+MIXING_QUESTIONS: list[str] = [
+    "what is ahri q base damage?",
+    "recommended items for bard?",
+    "nautiuls attack damage",
+    "ekko ability costs",
+    "master yi armor per level",
+    "syndra w cooldown",
+    "cassiopeia q effect values",
+    "seraphine cooldown ranks",
+    "zed base stats",
+    "infinity edge cost",
+]
+
+
+def run_version_mixing_suite(
+    engine: Engine, embedder: EmbeddingProvider, k: int = 5, source_filter: str = DDAGON_SOURCE
+) -> float:
+    """Fraction of patch-scoped queries whose top-k spans multiple version windows.
+
+    Run against a fully indexed frozen corpus (all patches indexed; latest
+    current). Correct time-aware retrieval must score 0.0; the suite guards the
+    index against leakage (target < 5%).
+    """
+    at_time = datetime.now(UTC)
+    mixed = 0
+    for question in MIXING_QUESTIONS:
+        [question_vector] = embedder.embed([question])
+        hits = retrieve(engine, question_vector, at_time=at_time, k=k, source_filter=source_filter)
+        if version_mix_report(hits).is_mixed:
+            mixed += 1
+    return mixed / len(MIXING_QUESTIONS)

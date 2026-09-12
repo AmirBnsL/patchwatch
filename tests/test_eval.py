@@ -74,3 +74,32 @@ def test_classification_suite_on_frozen_corpus() -> None:
     report = run_classification_suite()
     assert report.accuracy >= 0.85
     assert not report.wrong  # all 7 hand-labeled directions must match
+
+
+@pytest.mark.integration
+def test_version_mixing_suite_zero_on_indexed_corpus() -> None:
+    """Full corpus indexed (latest current) → 0% mixing (target < 5%)."""
+    from patchwatch.db.connection import get_engine
+    from patchwatch.db.repositories import DocumentRepository
+    from patchwatch.eval.suites import run_version_mixing_suite
+    from patchwatch.fixtures.manifest import load_manifest
+    from patchwatch.graph.graph import run_monitor
+    from patchwatch.graph.nodes import GraphDeps
+    from patchwatch.ingest.embeddings import HashEmbeddings
+    from patchwatch.ingest.frozen import DDAGON_SOURCE, FrozenCorpusFetcher, FrozenDigestLoader
+
+    engine = get_engine()
+    embedder = HashEmbeddings(dim=1536)
+    repo = DocumentRepository(engine)
+    loader = FrozenDigestLoader()
+
+    # Index all three frozen patches in sequence (hash-guarded: only first run indexes).
+    for version in load_manifest().versions:
+        run_monitor(
+            GraphDeps(fetcher=FrozenCorpusFetcher(version), repo=repo, digest_loader=loader),
+            source=DDAGON_SOURCE,
+        )
+
+    # Clear non-current windows for mixing: latest patch current → rate must be 0.
+    rate = run_version_mixing_suite(engine, embedder, k=5)
+    assert rate < 0.05

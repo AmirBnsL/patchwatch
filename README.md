@@ -32,8 +32,8 @@ Python 3.14 · LangGraph · Postgres 16 + pgvector · FastAPI · Docker · OpenT
 - `docs/LEARNINGS.md` — (after build) design decisions, what broke, what I learned.
 
 ## Status
-- [x] Phase A′: foundations (Postgres+pgvector, LoL snapshot corpus, LangGraph skeleton, eval harness start)
-- [ ] Phase B′: semantic layers (prose-aware classification, contradiction, patch-scoped QA)
+- [x] Phase A′: foundations (Postgres+pgvector, frozen Data Dragon corpus, numeric-first pipeline, eval harness + gate)
+- [x] Phase B′: semantic layers (embeddings + LLM adjudication, contradiction detection, patch-scoped QA, version-mixing flag)
 - [ ] Phase C′: impact briefing + HITL + observability
 - [ ] Phase D′: live refresh + deploy + blog post
 
