@@ -18,6 +18,8 @@ dependencies = [
     "uvicorn[standard]>=0.34",
     "openai>=1.60",
     "tiktoken>=0.8",
+    "httpx>=0.28",
+    "beautifulsoup4>=4.13",
 ]
 
 [dependency-groups]
@@ -26,7 +28,6 @@ dev = [
     "pytest-cov>=6",
     "ruff>=0.9",
     "mypy>=1.14",
-    "httpx>=0.28",
 ]
 
 [build-system]
