@@ -123,3 +123,7 @@ class FakeRunState:
 
 class FakeStateRepository(FakeRepository, FakeRunState):
     """Full Repository protocol double: docs/chunks + run state."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        FakeRepository.__init__(self, **kwargs)
+        FakeRunState.__init__(self)
