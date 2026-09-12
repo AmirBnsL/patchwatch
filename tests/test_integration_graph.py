@@ -83,15 +83,15 @@ def test_monitor_lifecycle(repo: DocumentRepository) -> None:
     # Run 1: only v1 published -> bootstrap index (new doc).
     first = run_monitor(GraphDeps(fetcher=SnapshotFetcher({"26.6"}), repo=repo), FIXTURE_SOURCE)
     assert first["reindexed"] is True
-    assert first["candidates"]  # new-content candidates, all meaningful
-    assert all(c.change_class == "meaningful" for c in first["candidates"])
+    assert first["candidates"]  # new-content candidates, all uncertain
+    assert all(c.change_class == "uncertain" for c in first["candidates"])
     assert all(valid_to is None for _, valid_to in _chunk_times(ext, "26.6"))
 
     # Run 2: v2 now published -> delta, diff, classify, re-index.
     second = run_monitor(GraphDeps(fetcher=SnapshotFetcher({"26.7"}), repo=repo), FIXTURE_SOURCE)
     assert second["reindexed"] is True
     classes = [c.change_class for c in second["candidates"]]
-    assert "meaningful" in classes and "cosmetic" in classes
+    assert "uncertain" in classes and "neutral" in classes
 
     # Versioning preserved: v1 closed at v2's publish time, v2 current, nothing deleted.
     v1_valid_to = datetime.fromisoformat(v2.published_at.replace("Z", "+00:00"))

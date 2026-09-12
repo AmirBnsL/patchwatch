@@ -44,13 +44,13 @@ def test_full_run_indexes_v2_and_classifies_planted_edits() -> None:
     assert repo.superseded  # v1 chunks were closed
     assert any(insert.get("version") == "26.7" for insert in repo.inserts)
 
-    # Planted edits split across chunks: typo -> cosmetic, stat change -> meaningful.
+    # Planted edits split across chunks: typo -> neutral, stat change -> uncertain.
     classes = [c.change_class for c in result["candidates"]]
-    assert "meaningful" in classes and "cosmetic" in classes
-    meaningful = [c for c in result["candidates"] if c.change_class == "meaningful"]
-    cosmetic = [c for c in result["candidates"] if c.change_class == "cosmetic"]
-    assert any("90/115/140/165/190" in c.new_text for c in meaningful)
-    assert any("excels" in c.new_text for c in cosmetic)
+    assert "uncertain" in classes and "neutral" in classes
+    uncertain = [c for c in result["candidates"] if c.change_class == "uncertain"]
+    neutral = [c for c in result["candidates"] if c.change_class == "neutral"]
+    assert any("90/115/140/165/190" in c.new_text for c in uncertain)
+    assert any("excels" in c.new_text for c in neutral)
 
 
 def test_no_delta_run_ends_without_reindex() -> None:

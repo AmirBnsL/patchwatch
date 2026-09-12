@@ -12,14 +12,21 @@ from difflib import SequenceMatcher
 from typing import Any
 
 from patchwatch.db.repositories import ChunkRecord, Repository
-from patchwatch.fixtures.snapshot import Fetcher
-from patchwatch.graph.state import ChangeCandidate, DocDelta, MonitorState
+from patchwatch.diff.numeric import numeric_diff
+from patchwatch.fixtures.snapshot import Digest, Fetcher, SnapshotDocument
+from patchwatch.graph.state import (
+    NEUTRAL,
+    ChangeCandidate,
+    DigestLoader,
+    DocDelta,
+    MonitorState,
+)
 from patchwatch.ingest.chunking import chunk_text
 from patchwatch.ingest.normalize import content_hash, normalize_text
 
-# difflib ratio above which a changed chunk is treated as cosmetic (Phase A
+# difflib ratio above which a prose-only change is treated as neutral (Phase A
 # heuristic; replaced by embedding distance + LLM adjudication in Phase B).
-# Calibrated on the fixture: the planted rewrite scores < 0.96, the typo ~0.98.
+# Calibrated on the frozen corpus: planted typo ~0.999, real rewrites < 0.93.
 COSMETIC_SIMILARITY_THRESHOLD = 0.96
 
 
@@ -29,6 +36,7 @@ class GraphDeps:
 
     fetcher: Fetcher
     repo: Repository
+    digest_loader: DigestLoader | None = None  # numeric sources only
 
 
 def _parse_iso(value: str) -> datetime:
@@ -43,7 +51,7 @@ def ingest(state: MonitorState, deps: GraphDeps) -> dict[str, Any]:
     for doc in docs:
         previous = deps.repo.latest(doc.source, doc.external_id)
         changed = previous is None or previous.content_hash != content_hash(doc.content)
-        delta = DocDelta(document=doc, previous=previous, changed=changed)
+        delta = DocDelta(document=doc, previous=previous, changed=changed, digest=doc.digest)
         fetched.append(delta)
         if changed:
             deltas.append(delta)
@@ -55,52 +63,91 @@ def ingest(state: MonitorState, deps: GraphDeps) -> dict[str, Any]:
 
 
 def version_diff(state: MonitorState, deps: GraphDeps) -> dict[str, Any]:
-    """Chunk-level diff of changed docs against their stored chunks."""
+    """Diff changed docs: numeric path (digests) or prose path (chunked text)."""
     candidates: list[ChangeCandidate] = []
     for delta in state["deltas"]:
-        old_chunks = deps.repo.chunks_for_document(delta.previous.id) if delta.previous else []
-        new_chunks = chunk_text(delta.document.content)
-        doc_key = delta.previous.id if delta.previous else ""
-        span = max(len(old_chunks), len(new_chunks))
-        for index in range(span):
-            old_text = old_chunks[index] if index < len(old_chunks) else ""
-            new_text = new_chunks[index] if index < len(new_chunks) else ""
-            if normalize_text(old_text) == normalize_text(new_text):
-                continue
-            similarity = (
-                SequenceMatcher(None, normalize_text(old_text), normalize_text(new_text)).ratio()
-                if old_text
-                else 0.0
-            )
-            candidates.append(
-                ChangeCandidate(
-                    document_id=doc_key,
-                    chunk_index=index,
-                    old_text=old_text,
-                    new_text=new_text,
-                    similarity=similarity,
-                )
-            )
+        if delta.digest is not None and delta.previous is not None:
+            candidates.extend(_numeric_candidates(delta, delta.digest, deps))
+        else:
+            candidates.extend(_prose_candidates(delta, deps))
     return {
         "candidates": candidates,
-        "log": [f"version_diff: {len(candidates)} candidate chunk(s)"],
+        "log": [f"version_diff: {len(candidates)} candidate change(s)"],
     }
 
 
+def _numeric_candidates(delta: DocDelta, digest: Digest, deps: GraphDeps) -> list[ChangeCandidate]:
+    """Digest-vs-digest diff against the previous patch version."""
+    assert delta.previous is not None  # numeric path requires a previous version
+    assert deps.digest_loader is not None
+    old_digest = deps.digest_loader.load(
+        delta.document.source, delta.document.external_id, delta.previous.version or ""
+    )
+    if old_digest is None:
+        return _prose_candidates(delta, deps)  # no old digest → fall back to text
+    scope = delta.document.external_id or ""
+    return [
+        ChangeCandidate(
+            document_id=delta.previous.id,
+            chunk_index=0,
+            old_text=str(change.old),
+            new_text=str(change.new),
+            similarity=0.0,
+            kind="numeric",
+            field=change.field,
+            direction=change.direction,
+            magnitude=change.magnitude,
+        )
+        for change in numeric_diff(old_digest, digest, scope)
+    ]
+
+
+def _prose_candidates(delta: DocDelta, deps: GraphDeps) -> list[ChangeCandidate]:
+    """Chunk-aligned text diff (fixture/prose-style sources)."""
+    old_chunks = deps.repo.chunks_for_document(delta.previous.id) if delta.previous else []
+    new_chunks = chunk_text(delta.document.content)
+    doc_key = delta.previous.id if delta.previous else ""
+    span = max(len(old_chunks), len(new_chunks))
+    candidates: list[ChangeCandidate] = []
+    for index in range(span):
+        old_text = old_chunks[index] if index < len(old_chunks) else ""
+        new_text = new_chunks[index] if index < len(new_chunks) else ""
+        if normalize_text(old_text) == normalize_text(new_text):
+            continue
+        similarity = (
+            SequenceMatcher(None, normalize_text(old_text), normalize_text(new_text)).ratio()
+            if old_text
+            else 0.0
+        )
+        candidates.append(
+            ChangeCandidate(
+                document_id=doc_key,
+                chunk_index=index,
+                old_text=old_text,
+                new_text=new_text,
+                similarity=similarity,
+            )
+        )
+    return candidates
+
+
 def change_class(state: MonitorState, deps: GraphDeps) -> dict[str, Any]:
-    """Classify each candidate meaningful/cosmetic (Phase A similarity heuristic)."""
+    """Assign the final class: numeric direction first, prose similarity second."""
+    del deps
     classified: list[ChangeCandidate] = []
     for candidate in state["candidates"]:
-        if not candidate.old_text:
-            change_kind = "meaningful"  # brand-new content must be indexed
+        if candidate.kind == "numeric":
+            label = candidate.direction or "uncertain"
+        elif not candidate.old_text:
+            label = "uncertain"  # brand-new content
+        elif candidate.similarity >= COSMETIC_SIMILARITY_THRESHOLD:
+            label = NEUTRAL
         else:
-            change_kind = (
-                "cosmetic"
-                if candidate.similarity >= COSMETIC_SIMILARITY_THRESHOLD
-                else "meaningful"
-            )
-        classified.append(replace(candidate, change_class=change_kind))
-    summary = ", ".join(f"chunk[{c.chunk_index}]={c.change_class}" for c in classified)
+            label = "uncertain"
+        classified.append(replace(candidate, change_class=label))
+    summary = ", ".join(
+        f"{c.kind}[{c.field or c.chunk_index}]={c.change_class}" for c in classified
+    )
     return {
         "candidates": classified,
         "log": [f"change_class: {summary or 'none'}"],
@@ -110,7 +157,7 @@ def change_class(state: MonitorState, deps: GraphDeps) -> dict[str, Any]:
 def reindex(state: MonitorState, deps: GraphDeps) -> dict[str, Any]:
     """Publish new versions: supersede old chunks, insert new rows (never delete)."""
     for delta in state["deltas"]:
-        doc = delta.document
+        doc: SnapshotDocument = delta.document
         published_at = _parse_iso(doc.published_at)
         if delta.previous is not None:
             deps.repo.supersede_document(delta.previous.id, published_at)

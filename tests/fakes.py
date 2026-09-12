@@ -66,3 +66,13 @@ def stored(doc: SnapshotDocument) -> StoredDocument:
         version=doc.version,
         content_hash=content_hash(doc.content),
     )
+
+
+class FakeDigestLoader:
+    """In-memory digest loader returning canned digests per (external_id, version)."""
+
+    def __init__(self, digests: dict[tuple[str, str], dict] | None = None) -> None:
+        self.digests = digests or {}
+
+    def load(self, source: str, external_id: str, version: str) -> dict | None:
+        return self.digests.get((external_id, version))

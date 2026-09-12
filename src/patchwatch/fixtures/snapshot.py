@@ -20,6 +20,8 @@ from typing import Protocol
 FIXTURE_SOURCE = "fixture"
 EXTERNAL_ID = "champion/Ahri"
 
+Digest = dict[str, "str | float | int | bool | None"]  # flat dotted-path → scalar
+
 
 @dataclass(frozen=True)
 class SnapshotDocument:
@@ -31,6 +33,7 @@ class SnapshotDocument:
     version: str
     content: str
     published_at: str  # ISO-8601; used as valid_from for indexing
+    digest: Digest | None = None  # numeric substrate for ddragon-style sources
 
 
 @dataclass(frozen=True)

@@ -10,13 +10,15 @@ from patchwatch.graph.nodes import GraphDeps, change_class, ingest, reindex, ver
 from patchwatch.graph.state import ChangeCandidate, DocDelta, MonitorState
 from patchwatch.ingest.chunking import chunk_text
 from patchwatch.ingest.normalize import content_hash
-from tests.fakes import FakeFetcher, FakeRepository, stored
+from tests.fakes import FakeDigestLoader, FakeFetcher, FakeRepository, stored
 
 
 def _state(**overrides: Any) -> MonitorState:
     base: MonitorState = {
         "run_id": "run-1",
         "source": FIXTURE_SOURCE,
+        "patch_from": None,
+        "patch_to": None,
         "fetched": [],
         "deltas": [],
         "candidates": [],
@@ -94,10 +96,40 @@ def test_version_diff_unchanged_delta_no_candidates() -> None:
     assert out["candidates"] == []
 
 
+def test_version_diff_numeric_path_uses_digest_loader() -> None:
+    v266, v267 = load_version("26.6"), load_version("26.7")
+    old_digest = {"stats.armor": 21.0, "spells.0.cooldown": "7"}
+    new_digest = {"stats.armor": 18.0, "spells.0.cooldown": "7"}
+    repo = FakeRepository(latest_by={(FIXTURE_SOURCE, v267.external_id): stored(v266)})
+    deps = GraphDeps(
+        fetcher=FakeFetcher([]),
+        repo=repo,
+        digest_loader=FakeDigestLoader({(v267.external_id, "26.6"): old_digest}),
+    )
+    delta = DocDelta(document=v267, previous=stored(v266), changed=True, digest=new_digest)
+    out = version_diff(_state(deltas=[delta]), deps)
+    assert len(out["candidates"]) == 1
+    candidate = out["candidates"][0]
+    assert candidate.kind == "numeric"
+    assert candidate.field == "stats.armor"
+    assert candidate.direction == "nerf"
+    assert candidate.change_class == ""  # set later by change_class node
+
+
+def test_version_diff_numeric_without_old_digest_falls_back_to_prose() -> None:
+    v2 = load_version("26.7")
+    repo = FakeRepository(latest_by={(FIXTURE_SOURCE, v2.external_id): stored(v2)})
+    deps = GraphDeps(fetcher=FakeFetcher([]), repo=repo, digest_loader=FakeDigestLoader())
+    delta = DocDelta(document=v2, previous=stored(v2), changed=True, digest={"stats.hp": 590})
+    out = version_diff(_state(deltas=[delta]), deps)
+    assert all(candidate.kind == "prose" for candidate in out["candidates"])
+    assert len(out["candidates"]) >= 1
+
+
 # --- change_class ---
 
 
-def test_change_class_typo_is_cosmetic() -> None:
+def test_change_class_typo_is_neutral() -> None:
     candidate = ChangeCandidate(
         document_id="d1",
         chunk_index=0,
@@ -107,10 +139,27 @@ def test_change_class_typo_is_cosmetic() -> None:
     )
     deps = GraphDeps(fetcher=FakeFetcher([]), repo=FakeRepository())
     out = change_class(_state(candidates=[candidate]), deps)
-    assert out["candidates"][0].change_class == "cosmetic"
+    assert out["candidates"][0].change_class == "neutral"
 
 
-def test_change_class_rewrite_is_meaningful() -> None:
+def test_change_class_numeric_direction_is_final_label() -> None:
+    deps = GraphDeps(fetcher=FakeFetcher([]), repo=FakeRepository())
+    for direction, expected in (("buff", "buff"), ("nerf", "nerf"), ("uncertain", "uncertain")):
+        candidate = ChangeCandidate(
+            document_id="d1",
+            chunk_index=0,
+            old_text="75",
+            new_text="90",
+            similarity=0.0,
+            kind="numeric",
+            field="stats.armor",
+            direction=direction,
+        )
+        out = change_class(_state(candidates=[candidate]), deps)
+        assert out["candidates"][0].change_class == expected
+
+
+def test_change_class_prose_rewrite_is_uncertain() -> None:
     candidate = ChangeCandidate(
         document_id="d1",
         chunk_index=0,
@@ -120,10 +169,10 @@ def test_change_class_rewrite_is_meaningful() -> None:
     )
     deps = GraphDeps(fetcher=FakeFetcher([]), repo=FakeRepository())
     out = change_class(_state(candidates=[candidate]), deps)
-    assert out["candidates"][0].change_class == "meaningful"
+    assert out["candidates"][0].change_class == "uncertain"
 
 
-def test_change_class_new_content_is_meaningful() -> None:
+def test_change_class_new_content_is_uncertain() -> None:
     candidate = ChangeCandidate(
         document_id="",
         chunk_index=0,
@@ -133,7 +182,7 @@ def test_change_class_new_content_is_meaningful() -> None:
     )
     deps = GraphDeps(fetcher=FakeFetcher([]), repo=FakeRepository())
     out = change_class(_state(candidates=[candidate]), deps)
-    assert out["candidates"][0].change_class == "meaningful"
+    assert out["candidates"][0].change_class == "uncertain"
 
 
 # --- reindex ---

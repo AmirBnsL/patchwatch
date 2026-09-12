@@ -4,8 +4,8 @@ Linear Phase A pipeline with conditional routing:
 
     ingest --(no delta)--> END
     ingest --(delta)--> version_diff -> change_class
-    change_class --(all cosmetic)--> END
-    change_class --(any meaningful)--> reindex -> END
+    change_class --(all neutral)--> END
+    change_class --(any buff/nerf/uncertain)--> reindex -> END
 
 Checkpointed with ``MemorySaver`` (dev); Postgres saver replaces it in Phase C.
 """
@@ -27,7 +27,7 @@ from patchwatch.graph.nodes import (
     reindex,
     version_diff,
 )
-from patchwatch.graph.state import MonitorState
+from patchwatch.graph.state import ACTIONABLE, MonitorState
 
 
 def _route_after_ingest(state: MonitorState) -> str:
@@ -35,7 +35,7 @@ def _route_after_ingest(state: MonitorState) -> str:
 
 
 def _route_after_classify(state: MonitorState) -> str:
-    if any(candidate.change_class == "meaningful" for candidate in state["candidates"]):
+    if any(candidate.change_class in ACTIONABLE for candidate in state["candidates"]):
         return "reindex"
     return END
 
@@ -61,7 +61,13 @@ def build_graph(deps: GraphDeps) -> CompiledStateGraph[MonitorState, Any, Any, A
     return graph.compile(checkpointer=MemorySaver())
 
 
-def run_monitor(deps: GraphDeps, source: str, run_id: str | None = None) -> dict[str, Any]:
+def run_monitor(
+    deps: GraphDeps,
+    source: str,
+    run_id: str | None = None,
+    patch_from: str | None = None,
+    patch_to: str | None = None,
+) -> dict[str, Any]:
     """Run one monitor pass; returns the final state (for summaries/eval)."""
     run_id = run_id or new_run_id()
     graph = build_graph(deps)
@@ -69,6 +75,8 @@ def run_monitor(deps: GraphDeps, source: str, run_id: str | None = None) -> dict
     initial: MonitorState = {
         "run_id": run_id,
         "source": source,
+        "patch_from": patch_from,
+        "patch_to": patch_to,
         "fetched": [],
         "deltas": [],
         "candidates": [],
