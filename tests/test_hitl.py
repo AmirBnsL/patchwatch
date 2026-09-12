@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
 from langgraph.types import Command
 
 from patchwatch.fixtures.pool import DEFAULT_POOL
@@ -155,3 +156,31 @@ def test_hitl_unrecognized_resume_rejects() -> None:
     final = graph.invoke(Command(resume="banana"), config)
     assert final["approval"] == "rejected"
     assert final["reindexed"] is False
+
+
+@pytest.mark.integration
+def test_hitl_resume_with_postgres_checkpointer() -> None:
+    """The SPEC §11 flow on the REAL Postgres saver: interrupt -> resume -> reindex."""
+    from patchwatch.graph.checkpointing import postgres_checkpointer
+
+    repo = FakeRepository(latest_by={("ddragon", "champion/Ahri"): stored(load_version("26.6"))})
+    rework_digest = {f"stats.field{i}": 200 for i in range(5)}
+
+    def make_deps() -> GraphDeps:
+        return GraphDeps(
+            fetcher=FakeFetcher([_digest_doc("26.7", rework_digest)], expected_source="ddragon"),
+            repo=repo,
+            digest_loader=FakeDigestLoader({("champion/Ahri", "26.6"): _old_digest()}),
+            brief_generator=TemplateBriefGenerator(),
+            pool=DEFAULT_POOL,
+        )
+
+    with postgres_checkpointer() as checkpointer:
+        graph = build_graph(make_deps(), checkpointer)
+        config = {"configurable": {"thread_id": "pg-hitl-test"}}
+        interrupted = graph.invoke(_state(), config)
+        assert interrupted.get("__interrupt__"), "gated on the Postgres checkpointer"
+        final = graph.invoke(Command(resume="approved"), config)
+        assert final["approval"] == "approved"
+        assert final["reindexed"] is True
+        assert repo.inserts

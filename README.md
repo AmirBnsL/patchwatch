@@ -34,7 +34,7 @@ Python 3.14 · LangGraph · Postgres 16 + pgvector · FastAPI · Docker · OpenT
 ## Status
 - [x] Phase A′: foundations (Postgres+pgvector, frozen Data Dragon corpus, numeric-first pipeline, eval harness + gate)
 - [x] Phase B′: semantic layers (embeddings + LLM adjudication, contradiction detection, patch-scoped QA, version-mixing flag)
-- [ ] Phase C′: impact briefing + HITL + observability
+- [x] Phase C′: impact briefing + HITL (Postgres checkpointing/resume) + observability (OTel spans, cost/latency persistence)
 - [ ] Phase D′: live refresh + deploy + blog post
 
 See `docs/SPEC.md` §10 for the phase-by-phase plan.

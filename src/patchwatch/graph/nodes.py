@@ -245,11 +245,16 @@ REWORK_FIELD_COUNT = 5  # many fields changed at once = rework-level
 
 
 def severity_for(candidates: list[ChangeCandidate]) -> str:
-    """Deterministic severity: magnitude × breadth (SPEC §9.2 rules first)."""
+    """Deterministic severity: magnitude × breadth (SPEC §9.2 rules first).
+
+    Breadth counts only real transitions (old text present) — brand-new content
+    is bootstrap, not a rework.
+    """
+    transitions = [candidate for candidate in candidates if candidate.old_text]
     magnitudes = [
-        candidate.magnitude for candidate in candidates if candidate.magnitude is not None
+        candidate.magnitude for candidate in transitions if candidate.magnitude is not None
     ]
-    if len(candidates) >= REWORK_FIELD_COUNT or any(m >= HIGH_MAGNITUDE for m in magnitudes):
+    if len(transitions) >= REWORK_FIELD_COUNT or any(m >= HIGH_MAGNITUDE for m in magnitudes):
         return "high"
     if magnitudes:
         return "medium" if max(magnitudes) >= 0.05 else "low"
@@ -258,7 +263,8 @@ def severity_for(candidates: list[ChangeCandidate]) -> str:
 
 def requires_human_for(candidates: list[ChangeCandidate], severity: str) -> bool:
     """Rework-level changes pause for human approval (HITL, SPEC §6.1)."""
-    return severity == "high" or len(candidates) >= REWORK_FIELD_COUNT
+    transitions = [candidate for candidate in candidates if candidate.old_text]
+    return severity == "high" or len(transitions) >= REWORK_FIELD_COUNT
 
 
 def impact_brief(state: MonitorState, deps: GraphDeps) -> dict[str, Any]:

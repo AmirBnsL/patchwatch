@@ -44,8 +44,14 @@ def _print_summary(result: dict[str, Any]) -> None:
 
 def _recorder_and_checkpointer(
     recording: bool = True,
+    use_pg: bool = False,
 ) -> Iterator[tuple[Any, Any]]:
-    """Build (recorder, checkpointer) — Postgres checkpointer when reachable."""
+    """Build (recorder, checkpointer).
+
+    MemorySaver by default — checkpointing megabyte-scale monitor states through
+    Postgres corrupts the wire protocol (server: 'invalid message length'). The
+    Postgres saver is opt-in (--pg-checkpointer) for HITL-resumable runs.
+    """
     from langgraph.checkpoint.memory import MemorySaver
 
     from patchwatch.db.connection import get_engine
@@ -53,12 +59,14 @@ def _recorder_and_checkpointer(
     from patchwatch.observability.runs import RunRecorder
 
     recorder = RunRecorder(DocumentRepository(get_engine())) if recording else None
+    if not use_pg:
+        yield recorder, MemorySaver()
+        return
     try:
         from patchwatch.graph.checkpointing import postgres_checkpointer
 
         with postgres_checkpointer() as checkpointer:
             yield recorder, checkpointer
-        return
     except Exception:  # noqa: BLE001 - fall back to memory checkpointing
         yield recorder, MemorySaver()
 
@@ -73,9 +81,14 @@ def monitor(
         None, help="ddragon only: frozen patch version to ingest (e.g. 16.18.1)."
     ),
     no_record: bool = typer.Option(False, help="Skip run persistence (debug)."),
+    pg_checkpointer: bool = typer.Option(
+        False, help="Use the Postgres checkpointer (needed for HITL resume)."
+    ),
 ) -> None:
     """Run the monitor pipeline (detect → diff → classify → brief → gate → reindex)."""
-    for recorder, checkpointer in _recorder_and_checkpointer(recording=not no_record):
+    for recorder, checkpointer in _recorder_and_checkpointer(
+        recording=not no_record, use_pg=pg_checkpointer
+    ):
         from patchwatch.graph.graph import run_monitor
         from patchwatch.graph.nodes import GraphDeps
 
@@ -146,7 +159,7 @@ def resume(
     from patchwatch.graph.graph import build_graph
     from patchwatch.graph.nodes import GraphDeps
 
-    for _recorder, checkpointer in _recorder_and_checkpointer(recording=False):
+    for _recorder, checkpointer in _recorder_and_checkpointer(recording=False, use_pg=True):
         deps = GraphDeps(
             fetcher=_noop_fetcher(),
             repo=_deps_repo(None),
@@ -154,7 +167,13 @@ def resume(
             pool=_pool(),
         )
         graph = build_graph(deps, checkpointer)
-        result = graph.invoke(Command(resume=decision), {"configurable": {"thread_id": run_id}})
+        try:
+            result = graph.invoke(Command(resume=decision), {"configurable": {"thread_id": run_id}})
+        except Exception as exc:  # noqa: BLE001 - CLI surface: friendly errors
+            raise typer.BadParameter(
+                f"could not resume run {run_id!r}: {exc}. Hint: the original run must "
+                "have been started with --pg-checkpointer."
+            ) from exc
         _print_summary(result)
 
 
