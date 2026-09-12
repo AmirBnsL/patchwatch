@@ -15,5 +15,14 @@ services:
       timeout: 5s
       retries: 10
 
+  app:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+psycopg://patchwatch:patchwatch@postgres:5432/patchwatch
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["python", "-m", "patchwatch", "monitor", "--source", "fixture"]
+
 volumes:
   pgdata:
