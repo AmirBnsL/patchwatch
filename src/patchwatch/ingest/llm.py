@@ -31,3 +31,29 @@ class OpenAIChat:
         )
         content = response.choices[0].message.content
         return content or ""
+
+
+_ADJUDICATE_PROMPT = """Two versions of a game-document passage differ. Decide whether
+the change alters gameplay guidance meaningfully, or is cosmetic (typo, formatting,
+wording).
+
+Version A:
+{old}
+
+Version B:
+{new}
+
+Answer with exactly one word: "neutral" (cosmetic/no guidance change) or "uncertain"
+(guidance meaningfully changed)."""
+
+
+class OpenAIAdjudicator:
+    """LLM-backed adjudication for borderline prose changes (calibrated in evals)."""
+
+    def __init__(self, llm: LLMClient) -> None:
+        self._llm = llm
+
+    def adjudicate(self, old_text: str, new_text: str) -> str:
+        answer = self._llm.complete(_ADJUDICATE_PROMPT.format(old=old_text, new=new_text))
+        word = answer.strip().lower().strip('."')
+        return word if word in ("neutral", "uncertain") else "uncertain"  # fail safe

@@ -15,8 +15,10 @@ from patchwatch.db.repositories import ChunkRecord, Repository
 from patchwatch.diff.numeric import numeric_diff
 from patchwatch.fixtures.snapshot import Digest, Fetcher, SnapshotDocument
 from patchwatch.graph.state import (
+    ACTIONABLE,
     NEUTRAL,
     ChangeCandidate,
+    ContradictionVerdict,
     DigestLoader,
     DocDelta,
     LLMAdjudicator,
@@ -24,6 +26,7 @@ from patchwatch.graph.state import (
 )
 from patchwatch.ingest.chunking import chunk_text
 from patchwatch.ingest.embeddings import EmbeddingProvider, cosine_similarity
+from patchwatch.ingest.llm import LLMClient
 from patchwatch.ingest.normalize import content_hash, normalize_text
 
 # difflib ratio above which a prose-only change is treated as neutral (fallback
@@ -44,6 +47,7 @@ class GraphDeps:
     digest_loader: DigestLoader | None = None  # numeric sources only
     embedder: EmbeddingProvider | None = None  # enables vector storage + prose distance
     adjudicator: LLMAdjudicator | None = None  # borderline prose adjudication
+    llm: LLMClient | None = None  # contradiction detection (skipped when absent)
 
 
 def _parse_iso(value: str) -> datetime:
@@ -177,6 +181,55 @@ def _prose_label_embedded(candidate: ChangeCandidate, deps: GraphDeps) -> str:
     if similarity >= EMBED_ADJUDICATE_LOW and deps.adjudicator is not None:
         return deps.adjudicator.adjudicate(candidate.old_text, candidate.new_text)
     return "uncertain"
+
+
+def contradict_detect(state: MonitorState, deps: GraphDeps) -> dict[str, Any]:
+    """Does the new version invalidate prior guidance? (LLM, actionable scopes only)
+
+    Skipped entirely when no LLM is wired — logged so runs stay reproducible.
+    """
+    if deps.llm is None:
+        return {"contradictions": [], "log": ["contradict_detect: skipped (no LLM wired)"]}
+
+    verdicts: list[ContradictionVerdict] = []
+    actionable_scopes = {
+        candidate.document_id
+        for candidate in state["candidates"]
+        if candidate.change_class in ACTIONABLE
+    }
+    for delta in state["deltas"]:
+        if delta.previous is None or delta.previous.id not in actionable_scopes:
+            continue
+        old_text = "\n".join(deps.repo.chunks_for_document(delta.previous.id))[:2000]
+        new_text = "\n".join(chunk_text(delta.document.content))[:2000]
+        verdicts.append(
+            ContradictionVerdict(
+                scope=delta.document.external_id or delta.previous.id,
+                contradiction=guidance_contradiction(old_text, new_text, deps.llm),
+            )
+        )
+    flagged = sum(verdict.contradiction for verdict in verdicts)
+    return {
+        "contradictions": verdicts,
+        "log": [f"contradict_detect: {flagged} contradiction(s) in {len(verdicts)} scope(s)"],
+    }
+
+
+_CONTRADICTION_PROMPT = """Version A (old guidance):
+{old}
+
+Version B (new guidance):
+{new}
+
+Does version B contradict version A's guidance? Contradiction means a DIFFERENT
+recommendation (different max order, different rush item, opposite advice) — not
+just changed numbers. Answer with exactly one word: "contradiction" or "consistent"."""
+
+
+def guidance_contradiction(old_text: str, new_text: str, llm: LLMClient) -> bool:
+    """LLM question: does the new guidance invalidate the old?"""
+    answer = llm.complete(_CONTRADICTION_PROMPT.format(old=old_text, new=new_text))
+    return answer.strip().lower().strip('."') == "contradiction"
 
 
 def reindex(state: MonitorState, deps: GraphDeps) -> dict[str, Any]:

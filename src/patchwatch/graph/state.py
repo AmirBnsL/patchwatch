@@ -61,6 +61,15 @@ class LLMAdjudicator(Protocol):
         ...
 
 
+@dataclass
+class ContradictionVerdict:
+    """Does the new version contradict the old one's guidance?"""
+
+    scope: str
+    contradiction: bool
+    evidence: str = ""  # LLM rationale or deterministic note
+
+
 class MonitorState(TypedDict):
     """State carried through the monitor graph."""
 
@@ -71,5 +80,6 @@ class MonitorState(TypedDict):
     fetched: list[DocDelta]
     deltas: list[DocDelta]
     candidates: list[ChangeCandidate]
+    contradictions: list[ContradictionVerdict]
     reindexed: bool
     log: list[str]
