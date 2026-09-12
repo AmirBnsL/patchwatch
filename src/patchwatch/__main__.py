@@ -209,6 +209,27 @@ def _noop_fetcher() -> Any:
 
 
 @app.command()
+def refresh(
+    keep: int = typer.Option(3, help="How many newest patches to keep frozen."),
+) -> None:
+    """Poll Data Dragon and freeze a new patch if one shipped (the only live path)."""
+
+    from patchwatch.fixtures.manifest import FIXTURES_DIR
+    from patchwatch.ingest.ddragon import DDragonClient
+    from patchwatch.ingest.live import LiveRefresher
+
+    refresher = LiveRefresher(DDragonClient(), FIXTURES_DIR, keep=keep)
+    result = refresher.refresh()
+    if result.frozen:
+        typer.echo(
+            f"frozen new patch {result.version} — "
+            f"run 'monitor --source ddragon --patch {result.version}'"
+        )
+    else:
+        typer.echo(f"no new patch (latest {result.checked_version} already frozen)")
+
+
+@app.command()
 def info() -> None:
     """Print effective configuration (no secrets)."""
     settings = get_settings()

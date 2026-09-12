@@ -41,14 +41,14 @@ class CorpusManifest(BaseModel):
 FIXTURES_DIR = Path(__file__).parent
 
 
-def raw_dir(version: str) -> Path:
+def raw_dir(version: str, base: Path | None = None) -> Path:
     """Directory holding raw Data Dragon JSON for one patch."""
-    return FIXTURES_DIR / "ddragon" / version
+    return (base or FIXTURES_DIR) / "ddragon" / version
 
 
-def prose_path(version: str) -> Path:
+def prose_path(version: str, base: Path | None = None) -> Path:
     """Path of the frozen prose markdown for one patch."""
-    return FIXTURES_DIR / "prose" / f"{version}.md"
+    return (base or FIXTURES_DIR) / "prose" / f"{version}.md"
 
 
 @lru_cache
@@ -57,3 +57,12 @@ def load_manifest() -> CorpusManifest:
     manifest_path = FIXTURES_DIR / "manifest.json"
     data: dict[str, Any] = json.loads(manifest_path.read_text(encoding="utf-8"))
     return CorpusManifest.model_validate(data)
+
+
+def write_manifest(manifest: CorpusManifest, base: Path | None = None) -> Path:
+    """Persist the manifest (the refresh path rewrites it when a patch lands)."""
+    manifest_path = (base or FIXTURES_DIR) / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(manifest.model_dump(), ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return manifest_path
