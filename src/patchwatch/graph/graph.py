@@ -5,7 +5,7 @@ Linear Phase A/B pipeline with conditional routing:
     ingest --(no delta)--> END
     ingest --(delta)--> version_diff -> change_class
     change_class --(all neutral)--> END
-    change_class --(any buff/nerf/uncertain)--> contradict_detect -> reindex -> END
+    change_class --(any buff/nerf/uncertain)--> contradict_detect -> impact_brief -> reindex -> END
 
 Checkpointed with ``MemorySaver`` (dev); Postgres saver replaces it in Phase C.
 """
@@ -23,6 +23,7 @@ from patchwatch.graph.nodes import (
     GraphDeps,
     change_class,
     contradict_detect,
+    impact_brief,
     ingest,
     new_run_id,
     reindex,
@@ -48,6 +49,7 @@ def build_graph(deps: GraphDeps) -> CompiledStateGraph[MonitorState, Any, Any, A
     graph.add_node("version_diff", lambda state: version_diff(state, deps))
     graph.add_node("change_class", lambda state: change_class(state, deps))
     graph.add_node("contradict_detect", lambda state: contradict_detect(state, deps))
+    graph.add_node("impact_brief", lambda state: impact_brief(state, deps))
     graph.add_node("reindex", lambda state: reindex(state, deps))
 
     graph.add_edge(START, "ingest")
@@ -58,7 +60,8 @@ def build_graph(deps: GraphDeps) -> CompiledStateGraph[MonitorState, Any, Any, A
     graph.add_conditional_edges(
         "change_class", _route_after_classify, {"contradict_detect": "contradict_detect", END: END}
     )
-    graph.add_edge("contradict_detect", "reindex")
+    graph.add_edge("contradict_detect", "impact_brief")
+    graph.add_edge("impact_brief", "reindex")
     graph.add_edge("reindex", END)
 
     return graph.compile(checkpointer=MemorySaver())
@@ -84,6 +87,7 @@ def run_monitor(
         "deltas": [],
         "candidates": [],
         "contradictions": [],
+        "briefs": [],
         "reindexed": False,
         "log": [],
     }

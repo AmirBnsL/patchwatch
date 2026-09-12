@@ -17,10 +17,12 @@ from patchwatch.fixtures.snapshot import Digest, Fetcher, SnapshotDocument
 from patchwatch.graph.state import (
     ACTIONABLE,
     NEUTRAL,
+    BriefGenerator,
     ChangeCandidate,
     ContradictionVerdict,
     DigestLoader,
     DocDelta,
+    ImpactBrief,
     LLMAdjudicator,
     MonitorState,
 )
@@ -48,6 +50,8 @@ class GraphDeps:
     embedder: EmbeddingProvider | None = None  # enables vector storage + prose distance
     adjudicator: LLMAdjudicator | None = None  # borderline prose adjudication
     llm: LLMClient | None = None  # contradiction detection (skipped when absent)
+    brief_generator: BriefGenerator | None = None  # impact briefs (skipped when absent)
+    pool: object | None = None  # PlayerPool (structural: champions/roles/watchlist)
 
 
 def _parse_iso(value: str) -> datetime:
@@ -230,6 +234,67 @@ def guidance_contradiction(old_text: str, new_text: str, llm: LLMClient) -> bool
     """LLM question: does the new guidance invalidate the old?"""
     answer = llm.complete(_CONTRADICTION_PROMPT.format(old=old_text, new=new_text))
     return answer.strip().lower().strip('."') == "contradiction"
+
+
+# --- impact_brief (Phase C1): deterministic severity + grounded briefing ---
+
+HIGH_MAGNITUDE = 0.25  # ±25% single-value swing
+REWORK_FIELD_COUNT = 5  # many fields changed at once = rework-level
+
+
+def severity_for(candidates: list[ChangeCandidate]) -> str:
+    """Deterministic severity: magnitude × breadth (SPEC §9.2 rules first)."""
+    magnitudes = [
+        candidate.magnitude for candidate in candidates if candidate.magnitude is not None
+    ]
+    if len(candidates) >= REWORK_FIELD_COUNT or any(m >= HIGH_MAGNITUDE for m in magnitudes):
+        return "high"
+    if magnitudes:
+        return "medium" if max(magnitudes) >= 0.05 else "low"
+    return "low"  # prose-only changes have no numeric magnitude
+
+
+def requires_human_for(candidates: list[ChangeCandidate], severity: str) -> bool:
+    """Rework-level changes pause for human approval (HITL, SPEC §6.1)."""
+    return severity == "high" or len(candidates) >= REWORK_FIELD_COUNT
+
+
+def impact_brief(state: MonitorState, deps: GraphDeps) -> dict[str, Any]:
+    """Cited impact briefing per actionable scope (pool-filtered relevance)."""
+    if deps.brief_generator is None:
+        return {"briefs": [], "log": ["impact_brief: skipped (no brief generator wired)"]}
+    briefs: list[ImpactBrief] = []
+    for delta in state["deltas"]:
+        delta_doc_key = delta.previous.id if delta.previous else ""
+        actionable = [
+            candidate
+            for candidate in state["candidates"]
+            if candidate.document_id == delta_doc_key and candidate.change_class in ACTIONABLE
+        ]
+        if not actionable:
+            continue
+        severity = severity_for(actionable)
+        evidence = [
+            f"{candidate.field or f'chunk[{candidate.chunk_index}]'}: "
+            f"{candidate.old_text} -> {candidate.new_text}"
+            for candidate in actionable
+        ]
+        brief = deps.brief_generator.generate(
+            scope=delta.document.external_id or "",
+            patch=state["patch_to"] or delta.document.version,
+            change_summary="; ".join(
+                f"{candidate.field or 'text'} {candidate.change_class}" for candidate in actionable
+            ),
+            evidence=evidence,
+            severity=severity,
+            requires_human=requires_human_for(actionable, severity),
+            pool=deps.pool,
+        )
+        briefs.append(brief)
+    return {
+        "briefs": briefs,
+        "log": [f"impact_brief: {len(briefs)} brief(s) generated"],
+    }
 
 
 def reindex(state: MonitorState, deps: GraphDeps) -> dict[str, Any]:

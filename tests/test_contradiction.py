@@ -33,6 +33,7 @@ def _state(**overrides: Any) -> MonitorState:
         "deltas": [],
         "candidates": [],
         "contradictions": [],
+        "briefs": [],
         "reindexed": False,
         "log": [],
     }

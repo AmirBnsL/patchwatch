@@ -5,8 +5,8 @@ Nodes take/return partial state as plain functions; the graph wires them.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Protocol, TypedDict
+from dataclasses import dataclass, field
+from typing import Any, Protocol, TypedDict
 
 from patchwatch.db.repositories import StoredDocument
 from patchwatch.fixtures.snapshot import Digest, SnapshotDocument  # noqa: F401 (re-export)
@@ -61,6 +61,22 @@ class LLMAdjudicator(Protocol):
         ...
 
 
+class BriefGenerator(Protocol):
+    """Generates a cited impact brief for one changed scope (mockable)."""
+
+    def generate(
+        self,
+        *,
+        scope: str,
+        patch: str,
+        change_summary: str,
+        evidence: list[str],
+        severity: str,
+        requires_human: bool,
+        pool: Any,
+    ) -> ImpactBrief: ...
+
+
 @dataclass
 class ContradictionVerdict:
     """Does the new version contradict the old one's guidance?"""
@@ -68,6 +84,27 @@ class ContradictionVerdict:
     scope: str
     contradiction: bool
     evidence: str = ""  # LLM rationale or deterministic note
+
+
+@dataclass
+class ImpactPoint:
+    """One claim in an impact brief — must cite an evidence chunk."""
+
+    text: str
+    citation: int  # 1-based index into the brief's evidence list
+
+
+@dataclass
+class ImpactBrief:
+    """Cited briefing for one changed scope (SPEC §6.1 impact_brief output)."""
+
+    scope: str
+    patch: str
+    summary: str
+    impact_points: list[ImpactPoint]
+    evidence: list[str]  # evidence texts; impact_points cite by 1-based index
+    requires_human: bool
+    grounded_in: list[str] = field(default_factory=list)  # chunk ids (audit)
 
 
 class MonitorState(TypedDict):
@@ -81,5 +118,6 @@ class MonitorState(TypedDict):
     deltas: list[DocDelta]
     candidates: list[ChangeCandidate]
     contradictions: list[ContradictionVerdict]
+    briefs: list[ImpactBrief]
     reindexed: bool
     log: list[str]
